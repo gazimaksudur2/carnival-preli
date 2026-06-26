@@ -41,7 +41,7 @@ This is an **investigator**, not a classifier. The complaint and the data may te
 
 ## Quick Start
 
-The fastest path for judges. Requires Docker and an Anthropic API key.
+The fastest path for judges. Requires Docker and either an Anthropic or OpenAI API key.
 
 ```bash
 docker build -t queuestorm-team .
@@ -49,10 +49,14 @@ docker build -t queuestorm-team .
 docker run -p 8000:8000 --env-file judging.env queuestorm-team
 ```
 
-Where `judging.env` contains:
+Where `judging.env` contains at minimum:
 
 ```
-ANTHROPIC_API_KEY=your_api_key_here
+# Set to 'anthropic' or 'openai'
+LLM_PROVIDER=anthropic
+
+ANTHROPIC_API_KEY=your_anthropic_key_here
+# OPENAI_API_KEY=your_openai_key_here
 ```
 
 Verify it is running:
@@ -82,7 +86,7 @@ pip install -r requirements.txt
 
 # 4. Set up environment variables
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+# Edit .env — set LLM_PROVIDER and add the matching API key
 
 # 5. Start the server
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -217,9 +221,9 @@ Each request follows this investigation sequence:
 9. **Reply** → `customer_reply` (safe, professional, no credential requests)
 10. **Escalate** → set `human_review_required: true` for disputes, fraud, high-value, or ambiguous cases
 
-**Prompt injection resistance:** The system prompt explicitly instructs Claude to treat the `complaint` field as raw customer text only and never follow instructions embedded inside it. A secondary validation layer checks the output for safety rule violations before returning it to the caller.
+**Prompt injection resistance:** The system prompt explicitly instructs the LLM to treat the `complaint` field as raw customer text only and never follow instructions embedded inside it. A secondary validation layer checks the output for safety rule violations before returning it to the caller.
 
-**Fallback behavior:** If Claude times out (25s limit, 5s before the harness cutoff) or returns unparseable output, the service returns a valid fallback response with `case_type: "other"` and `human_review_required: true` rather than a 500 error.
+**Fallback behavior:** If the LLM times out (25s limit, 5s before the harness cutoff) or returns unparseable output, the service returns a valid fallback response with `case_type: "other"` and `human_review_required: true` rather than a 500 error.
 
 ---
 
@@ -269,15 +273,22 @@ Sonnet 4.6 is chosen over Opus specifically to target the ≤5s p95 latency for 
 
 ## Models
 
-| Model | Role | Where it runs | Why |
-|---|---|---|---|
-| `claude-sonnet-4-6` | Primary ticket analyzer | Anthropic API (external HTTPS call) | Strong instruction-following for structured JSON output, multilingual capability (English + Bangla), reliable safety guardrail compliance, fast p95 latency within the 30s budget |
+The active model is controlled by the `LLM_PROVIDER` environment variable. Both providers use the same system prompt and safety validation layer.
 
-**Cost reasoning:** Each request sends approximately 800–1200 input tokens (system prompt + complaint + transaction history) and receives ~400 output tokens. At Sonnet 4.6 pricing this is well under $0.01 per ticket — appropriate for a hackathon evaluation with ~50–100 hidden test cases.
+| Provider | Default Model | Variable | Where it runs |
+|---|---|---|---|
+| `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_MODEL` | Anthropic API (external HTTPS) |
+| `openai` | `gpt-4o` | `OPENAI_MODEL` | OpenAI API (external HTTPS) |
+
+Override the model without touching code:
+```
+ANTHROPIC_MODEL=claude-opus-4-8
+OPENAI_MODEL=codex-mini-latest
+```
+
+**Cost reasoning:** Each request sends approximately 800–1200 input tokens (system prompt + complaint + transaction history) and receives ~400 output tokens. At Sonnet 4.6 or GPT-4o pricing this is well under $0.01 per ticket — appropriate for a hackathon evaluation with ~50–100 hidden test cases.
 
 **Why not a local model:** The runtime profile specifies 2 vCPU / 4 GB RAM with no GPU. Running a capable local model in that envelope within the 30s timeout is not feasible. The spec explicitly allows external LLM API calls.
-
-**Why not GPT-4o:** The team has Anthropic API access for this round. Claude Sonnet 4.6 handles structured JSON output and multilingual input with comparable quality.
 
 ---
 
@@ -286,8 +297,8 @@ Sonnet 4.6 is chosen over Opus specifically to target the ≤5s p95 latency for 
 | Component | Choice | Reason |
 |---|---|---|
 | Web framework | FastAPI | Async, automatic request validation via Pydantic, fast cold start |
-| Schema validation | Pydantic v2 | Strict enum validation catches wrong field names before they reach Claude |
-| AI provider | Anthropic Python SDK | Official SDK for Claude, handles retries and streaming |
+| Schema validation | Pydantic v2 | Strict enum validation catches wrong field names before they reach the LLM |
+| AI provider | Anthropic SDK + OpenAI SDK | Switchable via `LLM_PROVIDER` env var — no code changes to swap models |
 | Server | Uvicorn | ASGI server, works cleanly in Docker |
 | Container | Docker (python:3.11-slim) | Reproducible deployment, under 500 MB image |
 | Python | 3.11 | Stable, good async support, widely available in base images |
@@ -296,13 +307,17 @@ Sonnet 4.6 is chosen over Opus specifically to target the ≤5s p95 latency for 
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key |
-| `PORT` | No | Server port (default: `8000`) |
-| `REQUEST_TIMEOUT` | No | Claude call timeout in seconds (default: `25`) |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `LLM_PROVIDER` | Yes | `anthropic` | Which LLM to use: `anthropic` or `openai` |
+| `ANTHROPIC_API_KEY` | If `LLM_PROVIDER=anthropic` | — | Your Anthropic API key |
+| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-6` | Anthropic model ID to use |
+| `OPENAI_API_KEY` | If `LLM_PROVIDER=openai` | — | Your OpenAI API key |
+| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model ID to use |
+| `PORT` | No | `8000` | Server port |
+| `REQUEST_TIMEOUT` | No | `25` | LLM call timeout in seconds |
 
-Copy `.env.example` to `.env` and fill in real values. Never commit `.env`.
+Copy `.env.example` to `.env` and fill in the key for your chosen provider. Never commit `.env`.
 
 ---
 
