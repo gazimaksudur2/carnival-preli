@@ -39,6 +39,8 @@ PHISHING_KEYWORDS = [
 ]
 
 # Customer-reply phrases that indicate safety-guardrail violations from Claude.
+# These are only violations when the sentence does NOT contain a negation — e.g.
+# "We never ask for your OTP" is safe; "Please share your OTP" is not.
 FORBIDDEN_REPLY_PHRASES = [
     "provide your pin", "share your pin", "enter your pin",
     "provide your otp", "share your otp", "enter your otp",
