@@ -8,7 +8,7 @@ This is a **Python / FastAPI** project that uses the **Anthropic Claude API** to
 
 - **Language:** Python 3.12
 - **Framework:** FastAPI + Uvicorn
-- **AI:** Anthropic SDK (`anthropic`) — model `claude-sonnet-4-6`
+- **AI:** Anthropic SDK (`anthropic`) or OpenAI SDK (`openai`) — switched via `LLM_PROVIDER` env var
 - **Validation:** Pydantic v2
 - **Config:** `python-dotenv` — secrets in `.env`, never hardcoded
 - **Structure:** flat root — `main.py`, `models.py`, `analyzer.py`
@@ -101,9 +101,9 @@ Each model in `models.py` owns exactly one shape.
 
 ## Rule 6 — Security: Never Trust, Always Validate
 
-- `ANTHROPIC_API_KEY` lives in `.env` only — never in source code, not even in comments
+- `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` live in `.env` only — never in source code, not even in comments
 - `.env` is in `.gitignore` — never commit it
-- `.env.example` always has a dummy value: `ANTHROPIC_API_KEY=your_anthropic_api_key_here`
+- `.env.example` must always have dummy values for every env var, including both API keys
 - Never log the API key, complaint text containing PII, or full request bodies
 - Validate all inputs via Pydantic at the FastAPI boundary — never access raw request body without a model
 - Never pass complaint text into shell commands or file paths
@@ -151,14 +151,16 @@ except anthropic.APIError as e:
 
 ---
 
-## Rule 9 — Claude API Usage
+## Rule 9 — LLM API Usage
 
-- Always use `claude-sonnet-4-6` unless the spec says otherwise — never hardcode a model string as a bare literal, use a constant: `MODEL = "claude-sonnet-4-6"`
-- Set `max_tokens` explicitly — never rely on the default
-- Set a request timeout — the spec says `REQUEST_TIMEOUT=25`, honor it
-- The system prompt is the single source of safety guardrails — do not split guardrail logic between the system prompt and Python code
-- Always parse Claude's response as JSON — if parsing fails, log the raw text and raise a 500, not a silent fallback
-- Strip markdown code fences from Claude's output before `json.loads()` — Claude sometimes wraps JSON in ` ```json ``` `
+- The active provider is set by `LLM_PROVIDER` in `.env` — `anthropic` or `openai`. Never hardcode the provider in source.
+- Model IDs come from `ANTHROPIC_MODEL` / `OPENAI_MODEL` env vars with defaults in `_call_llm`. Never hardcode a bare model string.
+- Set `max_tokens` explicitly on every call — never rely on the default.
+- Set a request timeout — the spec says `REQUEST_TIMEOUT=25`, honor it.
+- The system prompt is the single source of safety guardrails — do not split guardrail logic between the system prompt and Python code.
+- Always parse the LLM response as JSON — if parsing fails, log the raw text and return the safe fallback, not a 500.
+- Strip markdown code fences before `json.loads()` — both Claude and GPT-4o sometimes wrap JSON in ` ```json ``` `.
+- If `LLM_PROVIDER` is set to an unknown value, the service must exit at startup with a clear error message — not fail silently on the first request.
 
 ---
 

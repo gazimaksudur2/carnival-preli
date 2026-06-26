@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Skill(artifact-design)",
-      "Skill(artifact-design:*)"
+      "Skill(artifact-design:*)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python3 -c ' *)",
+      "Bash(pip install *)",
+      "Bash(ANTHROPIC_API_KEY=dummy venv/bin/uvicorn main:app --host 0.0.0.0 --port 8765)",
+      "Bash(curl -s http://localhost:8765/health)",
+      "Bash(curl -s -X POST http://localhost:8765/analyze-ticket -H 'Content-Type: application/json' -d '{\"bad_field\": \"no ticket_id\"}')",
+      "Bash(kill %1)",
+      "Bash(curl -s -X POST http://localhost:8000/analyze-ticket -H 'Content-Type: application/json' -d '{ *)"
     ]
   }
 }
