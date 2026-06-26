@@ -23,20 +23,23 @@ A FastAPI-based AI service that investigates mobile banking complaints using Cla
 
 ```json
 {
-  "ticket_id": "string",
-  "complaint": "string (user's complaint text)",
+  "ticket_id": "string (required)",
+  "complaint": "string (required — English, Bangla, or Banglish)",
+  "language": "en | bn | mixed (optional)",
+  "channel": "in_app_chat | call_center | email | merchant_portal | field_agent (optional)",
+  "user_type": "customer | merchant | agent | unknown (optional)",
+  "campaign_context": "string (optional)",
   "transaction_history": [
     {
       "transaction_id": "string",
-      "type": "string",
-      "amount": number,
-      "timestamp": "string",
-      "status": "string",
-      "merchant": "string (optional)",
-      "receiver": "string (optional)"
+      "timestamp": "string (ISO 8601)",
+      "type": "transfer | payment | cash_in | cash_out | settlement | refund",
+      "amount": "number (BDT)",
+      "counterparty": "string (phone number, merchant ID, or agent ID)",
+      "status": "completed | failed | pending | reversed"
     }
   ],
-  "customer_tier": "standard | premium | vip"
+  "metadata": "object (optional)"
 }
 ```
 
@@ -46,14 +49,18 @@ A FastAPI-based AI service that investigates mobile banking complaints using Cla
 
 ```json
 {
-  "ticket_id": "string",
-  "summary": "string (1-2 sentence explanation of the issue)",
-  "evidence_check": "consistent | inconsistent | insufficient_data",
-  "case_type": "one of 8 categories (see below)",
-  "severity": "low | medium | high | critical",
-  "recommended_department": "one of 6 departments (see below)",
-  "action_items": ["list of suggested actions"],
-  "customer_message": "string (polite message to send to the customer)"
+  "ticket_id": "string (required — must echo request value)",
+  "relevant_transaction_id": "string | null (required — ID from history that matches the complaint, or null)",
+  "evidence_verdict": "consistent | inconsistent | insufficient_data (required)",
+  "case_type": "one of 8 categories — see below (required)",
+  "severity": "low | medium | high | critical (required)",
+  "department": "one of 6 departments — see below (required)",
+  "agent_summary": "string (required — 1-2 sentence case summary for the support agent)",
+  "recommended_next_action": "string (required — single operational next step for the agent)",
+  "customer_reply": "string (required — safe official reply, must respect safety rules)",
+  "human_review_required": "boolean (required — true for disputes, suspicious, high-value, or ambiguous cases)",
+  "confidence": "number 0.0–1.0 (optional)",
+  "reason_codes": ["array of short label strings (optional)"]
 }
 ```
 
@@ -98,12 +105,14 @@ A FastAPI-based AI service that investigates mobile banking complaints using Cla
 
 ---
 
-## Evidence Check Logic
+## Evidence Verdict Logic
 
 Claude must compare the complaint text vs. transaction_history:
 - `consistent` → the transaction data supports the complaint (e.g., customer says payment failed and transaction shows "failed")
 - `inconsistent` → the data contradicts the complaint (e.g., customer says payment failed but transaction shows "success")
 - `insufficient_data` → not enough transaction data to verify the complaint
+
+`relevant_transaction_id` must be the exact `transaction_id` string from the provided history that the complaint refers to, or `null` if no transaction matches.
 
 ---
 
@@ -116,6 +125,17 @@ Claude must NEVER:
 - 2+ critical safety violations = disqualified from finalist pool
 
 These rules must be enforced in the Claude prompt (system prompt guardrails).
+
+---
+
+## human_review_required Rules
+
+Set to `true` when any of these apply:
+- `case_type` is `wrong_transfer` or any disputed refund
+- `case_type` is `phishing_or_social_engineering`
+- `evidence_verdict` is `inconsistent` or `insufficient_data`
+- Amount is high (≥ 5000 BDT as a safe threshold)
+- Anything ambiguous that a human should verify
 
 ---
 
