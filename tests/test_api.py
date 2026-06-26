@@ -165,6 +165,77 @@ class TestSafetyGuardrails:
         assert "refund approved" not in response.json()["customer_reply"].lower()
 
 
+class TestSafeCustomerReplyUnit:
+    """Direct unit tests for the Python-layer safety scrubber in analyzer.py."""
+
+    def test_pin_request_replaced_with_fallback(self):
+        from analyzer import _safe_customer_reply, _SAFE_FALLBACK_REPLY
+        unsafe = "Please provide your pin so we can verify your account."
+        assert _safe_customer_reply(unsafe) == _SAFE_FALLBACK_REPLY
+
+    def test_otp_request_replaced_with_fallback(self):
+        from analyzer import _safe_customer_reply, _SAFE_FALLBACK_REPLY
+        unsafe = "Please enter your otp to proceed."
+        assert _safe_customer_reply(unsafe) == _SAFE_FALLBACK_REPLY
+
+    def test_refund_approved_replaced_with_fallback(self):
+        from analyzer import _safe_customer_reply, _SAFE_FALLBACK_REPLY
+        unsafe = "Your refund has been approved and will arrive shortly."
+        assert _safe_customer_reply(unsafe) == _SAFE_FALLBACK_REPLY
+
+    def test_negated_pin_warning_is_preserved(self):
+        # "never ask for your pin" is a safety reminder — must NOT be scrubbed.
+        from analyzer import _safe_customer_reply
+        safe = "Please note that we will never ask for your pin or otp."
+        assert _safe_customer_reply(safe) == safe
+
+    def test_clean_reply_is_unchanged(self):
+        from analyzer import _safe_customer_reply
+        safe = "We have received your complaint and our team is investigating."
+        assert _safe_customer_reply(safe) == safe
+
+
+class TestPhishingDetectionUnit:
+    """Direct unit tests for the Python-level phishing keyword detector."""
+
+    def test_otp_in_complaint_triggers_phishing(self):
+        from analyzer import _detect_phishing
+        assert _detect_phishing("Someone called me and asked for my OTP") is True
+
+    def test_bangla_pin_triggers_phishing(self):
+        from analyzer import _detect_phishing
+        assert _detect_phishing("কেউ আমার পিন চেয়েছে") is True
+
+    def test_normal_complaint_not_phishing(self):
+        from analyzer import _detect_phishing
+        assert _detect_phishing("My payment failed yesterday morning.") is False
+
+
+class TestHighValueEscalationUnit:
+    """Unit tests for the Python-level high-value severity escalation logic."""
+
+    def test_max_transaction_amount_returns_correct_max(self):
+        from analyzer import _max_transaction_amount
+        from models import TransactionItem, TransactionType, TransactionStatus
+        txns = [
+            TransactionItem(
+                transaction_id="T1", timestamp="2026-01-01T10:00:00Z",
+                type=TransactionType.TRANSFER, amount=1000.0,
+                counterparty="+8801700000001", status=TransactionStatus.COMPLETED,
+            ),
+            TransactionItem(
+                transaction_id="T2", timestamp="2026-01-01T11:00:00Z",
+                type=TransactionType.PAYMENT, amount=6000.0,
+                counterparty="+8801700000002", status=TransactionStatus.COMPLETED,
+            ),
+        ]
+        assert _max_transaction_amount(txns) == 6000.0
+
+    def test_max_transaction_amount_empty_returns_zero(self):
+        from analyzer import _max_transaction_amount
+        assert _max_transaction_amount([]) == 0.0
+
+
 class TestFallback:
     def test_analyze_ticket_returns_fallback_on_exception(self):
         # TestClient re-raises by default — disable to let the global handler produce a 500 response.
