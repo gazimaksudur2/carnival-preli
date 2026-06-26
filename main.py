@@ -91,7 +91,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 @app.exception_handler(Exception)
 async def global_error_handler(request: Request, exc: Exception):
     # Never expose stack traces or internal error messages to clients.
-    logger.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
+    log.error("Unhandled exception on %s: %s", request.url.path, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
@@ -104,11 +104,7 @@ async def global_error_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "provider": _provider_label(),
-        "fallback_only": not _has_api_key(),
-    }
+    return {"status": "ok"}
 
 
 @app.post("/analyze-ticket", response_model=AnalyzeResponse)
