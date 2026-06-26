@@ -72,26 +72,33 @@ ANALYSIS PROCESS:
 1. Read the complaint text carefully
 2. Read each transaction in transaction_history
 3. Cross-reference complaint vs transactions to identify relevant_transaction_id (exact ID from the list, or null). If multiple transactions could plausibly match and you cannot determine which one is correct without more information from the customer, set relevant_transaction_id to null and set evidence_verdict to insufficient_data. For duplicate_payment cases, relevant_transaction_id must point to the suspected duplicate — the second (later) transaction, not the first (original).
-4. Determine evidence_verdict: consistent / inconsistent / insufficient_data
+4. Determine evidence_verdict:
+   - consistent: transaction history matches the complaint (amount, time, type align)
+   - inconsistent: history CONTRADICTS the complaint — e.g. customer claims wrong_transfer but the same counterparty appears in 2+ prior transactions (established recipient pattern), or claim amount does not match any transaction
+   - insufficient_data: complaint is too vague to match any transaction, OR multiple transactions plausibly match and you cannot determine which one without more input
 5. Identify the case_type from the complaint context
 6. Determine severity using these BDT thresholds: low (no financial loss or < 500 BDT) / medium (500–4999 BDT) / high (5000–49999 BDT or service disruption) / critical (≥ 50000 BDT, confirmed fraud, or VIP customer)
 7. Route to the correct department based on case_type
 8. Write agent_summary (1-2 sentences for the support agent, referencing the transaction if relevant)
 9. Write recommended_next_action (one concrete operational step for the agent)
 10. Write customer_reply (polite, safe — no PIN/OTP requests, no refund promises, no third-party referrals)
-11. Set human_review_required: MANDATORY true when case_type is wrong_transfer, phishing_or_social_engineering, or when evidence_verdict is inconsistent or insufficient_data. Also true for high/critical severity or any ambiguity. Only false for clear low-severity cases with consistent evidence and no dispute.
+11. Set human_review_required:
+    - ALWAYS true for: wrong_transfer, phishing_or_social_engineering, evidence_verdict=inconsistent, high or critical severity, confirmed financial loss
+    - true for: agent_cash_in_issue with pending transaction
+    - FALSE for: vague complaints needing clarification (just ask for more info, no dispute open), refund_request where outcome is merchant-policy-dependent (not an error), payment_failed with standard automated reversal path, merchant_settlement_delay (handled by ops team without human agent), ambiguous cases where clarification is still needed (pending, not open)
+    - When in doubt for a low-severity case with no confirmed loss: set false
 12. Set confidence (0.0–1.0) and reason_codes (short descriptive strings)
 
-DEPARTMENT ROUTING:
+DEPARTMENT ROUTING — follow exactly, no exceptions:
 - wrong_transfer → dispute_resolution
-- refund_request (contested, high-value, or ambiguous) → dispute_resolution
-- refund_request (low severity, straightforward, no dispute) → customer_support
-- duplicate_payment → payments_ops
-- payment_failed → payments_ops
-- merchant_settlement_delay → merchant_operations
-- agent_cash_in_issue → agent_operations
-- phishing_or_social_engineering → fraud_risk
-- other, vague, or insufficient data cases → customer_support
+- refund_request → customer_support (always; refund eligibility is a merchant/policy matter, not a dispute)
+- duplicate_payment → payments_ops (always; requires payment ledger investigation)
+- payment_failed → payments_ops (always)
+- merchant_settlement_delay → merchant_operations (always)
+- agent_cash_in_issue → agent_operations (always)
+- phishing_or_social_engineering → fraud_risk (always)
+- other → customer_support
+- insufficient_data / vague complaint → customer_support
 
 OUTPUT FORMAT: Return ONLY valid JSON matching this exact schema. No markdown, no explanation, no text outside the JSON:
 {
@@ -328,23 +335,75 @@ def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> Analy
             reason_codes.append("phishing_keywords_detected")
         data["reason_codes"] = reason_codes
 
-    # Spec mandates human_review_required=true for these cases regardless of LLM output.
-    MANDATORY_REVIEW_CASE_TYPES = {
-        CaseType.WRONG_TRANSFER.value,
-        CaseType.PHISHING_OR_SOCIAL_ENGINEERING.value,
+    # Hard department routing — LLM output is overridden to match spec routing rules.
+    # The LLM tends to route everything financial to dispute_resolution; these rules
+    # enforce the correct department per case type regardless of what the LLM chose.
+    CASE_TYPE_DEPARTMENT_MAP = {
+        CaseType.WRONG_TRANSFER.value: Department.DISPUTE_RESOLUTION.value,
+        CaseType.PAYMENT_FAILED.value: Department.PAYMENTS_OPS.value,
+        CaseType.DUPLICATE_PAYMENT.value: Department.PAYMENTS_OPS.value,
+        CaseType.REFUND_REQUEST.value: Department.CUSTOMER_SUPPORT.value,
+        CaseType.MERCHANT_SETTLEMENT_DELAY.value: Department.MERCHANT_OPERATIONS.value,
+        CaseType.AGENT_CASH_IN_ISSUE.value: Department.AGENT_OPERATIONS.value,
+        CaseType.PHISHING_OR_SOCIAL_ENGINEERING.value: Department.FRAUD_RISK.value,
+        CaseType.OTHER.value: Department.CUSTOMER_SUPPORT.value,
     }
-    MANDATORY_REVIEW_EVIDENCE = {
-        EvidenceVerdict.INCONSISTENT.value,
-        EvidenceVerdict.INSUFFICIENT_DATA.value,
-    }
-    if (
-        data.get("case_type") in MANDATORY_REVIEW_CASE_TYPES
-        or data.get("evidence_verdict") in MANDATORY_REVIEW_EVIDENCE
-    ):
+    case_type_val = data.get("case_type")
+    if case_type_val in CASE_TYPE_DEPARTMENT_MAP:
+        data["department"] = CASE_TYPE_DEPARTMENT_MAP[case_type_val]
+
+    evidence = data.get("evidence_verdict")
+    case_type = data.get("case_type")
+    severity = data.get("severity")
+
+    # wrong_transfer requires human review ONLY when a transaction is identified (consistent
+    # or inconsistent evidence). If evidence is insufficient_data, no transaction is confirmed
+    # yet — just ask for clarification, don't open a dispute with a human agent.
+    if case_type == CaseType.WRONG_TRANSFER.value and evidence != EvidenceVerdict.INSUFFICIENT_DATA.value:
         data["human_review_required"] = True
 
+    # Phishing always requires human review — fraud risk must be alerted regardless.
+    if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING.value:
+        data["human_review_required"] = True
+
+    # Inconsistent evidence means a claimed dispute contradicts the transaction record —
+    # that requires a human to adjudicate regardless of case type.
+    if evidence == EvidenceVerdict.INCONSISTENT.value:
+        data["human_review_required"] = True
+
+    # Cases where human review is NOT required per spec — operational/clarification cases
+    # handled by ops teams or pending customer clarification.
+    NO_REVIEW_CASE_TYPES = {
+        CaseType.REFUND_REQUEST.value,            # merchant policy — inform customer only
+        CaseType.PAYMENT_FAILED.value,             # automated reversal path
+        CaseType.OTHER.value,                      # vague — ask for clarification first
+    }
+    if (
+        case_type in NO_REVIEW_CASE_TYPES
+        and evidence in (EvidenceVerdict.CONSISTENT.value, EvidenceVerdict.INSUFFICIENT_DATA.value)
+        and severity not in (Severity.HIGH.value, Severity.CRITICAL.value)
+    ):
+        data["human_review_required"] = False
+
+    # Merchant settlement delays are always handled by merchant_operations team directly —
+    # no human customer-support agent review needed regardless of amount or severity.
+    if (
+        case_type == CaseType.MERCHANT_SETTLEMENT_DELAY.value
+        and evidence in (EvidenceVerdict.CONSISTENT.value, EvidenceVerdict.INSUFFICIENT_DATA.value)
+    ):
+        data["human_review_required"] = False
+
+    # wrong_transfer + insufficient_data = clarification needed, no open dispute yet.
+    if (
+        case_type == CaseType.WRONG_TRANSFER.value
+        and evidence == EvidenceVerdict.INSUFFICIENT_DATA.value
+    ):
+        data["human_review_required"] = False
+
     # Escalate severity for high-value transactions regardless of Claude's assessment.
-    if max_amount >= HIGH_VALUE_THRESHOLD:
+    # Merchant settlements are expected to be large — don't treat them as high-value disputes.
+    HIGH_VALUE_REVIEW_EXEMPT = {CaseType.MERCHANT_SETTLEMENT_DELAY.value}
+    if max_amount >= HIGH_VALUE_THRESHOLD and case_type not in HIGH_VALUE_REVIEW_EXEMPT:
         if data.get("severity") in ("low", "medium"):
             data["severity"] = Severity.HIGH.value
             data["human_review_required"] = True
