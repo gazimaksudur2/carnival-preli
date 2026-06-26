@@ -67,12 +67,15 @@ ANALYSIS PROCESS:
 12. Set confidence (0.0–1.0) and reason_codes (short descriptive strings)
 
 DEPARTMENT ROUTING:
-- wrong_transfer, refund_request, duplicate_payment → dispute_resolution
+- wrong_transfer → dispute_resolution
+- refund_request (contested, high-value, or ambiguous) → dispute_resolution
+- refund_request (low severity, straightforward, no dispute) → customer_support
+- duplicate_payment → payments_ops
 - payment_failed → payments_ops
 - merchant_settlement_delay → merchant_operations
 - agent_cash_in_issue → agent_operations
 - phishing_or_social_engineering → fraud_risk
-- other, general queries → customer_support
+- other, vague, or insufficient data cases → customer_support
 
 OUTPUT FORMAT: Return ONLY valid JSON matching this exact schema. No markdown, no explanation, no text outside the JSON:
 {
@@ -221,21 +224,24 @@ def _safe_customer_reply(reply: str) -> str:
     Replace the reply with a safe fallback if Claude violated any guardrails.
     Guardrails are enforced in the prompt; this is a defence-in-depth check.
     """
-    lower = reply.lower()
-    negations = ("not ", "never ", "don't ", "do not ", "never ask")
-    for phrase in FORBIDDEN_REPLY_PHRASES:
-        idx = lower.find(phrase)
-        if idx == -1:
-            continue
-        # Allow the phrase when preceded by a negation — e.g. "do not share your OTP" is safe.
-        prefix = lower[max(0, idx - 15):idx]
-        if any(neg in prefix for neg in negations):
-            continue
-        return (
-            "Thank you for contacting us. We have received your complaint and "
-            "our team is investigating. We will update you on the outcome as "
-            "soon as possible."
-        )
+    negations = ("not ", "never ", "don't ", "do not ", "never ask", "do not ask")
+
+    # Split into sentences so negation scope is bounded correctly.
+    # A negation in one sentence must not excuse a violation in a different sentence.
+    sentences = [s.strip().lower() for s in reply.replace("!", ".").replace("?", ".").split(".") if s.strip()]
+
+    for sentence in sentences:
+        for phrase in FORBIDDEN_REPLY_PHRASES:
+            if phrase not in sentence:
+                continue
+            # Phrase is present — safe only if the same sentence also contains a negation.
+            if any(neg in sentence for neg in negations):
+                continue
+            return (
+                "Thank you for contacting us. We have received your complaint and "
+                "our team is investigating. We will update you on the outcome as "
+                "soon as possible."
+            )
     return reply
 
 

@@ -188,8 +188,8 @@ Accepts one complaint with transaction history and returns a full investigation 
 
 | Value | Typical case types |
 |---|---|
-| `customer_support` | `other`, low-severity `refund_request` |
-| `dispute_resolution` | `wrong_transfer`, contested `refund_request` |
+| `customer_support` | `other`, low-severity `refund_request`, vague or insufficient data cases |
+| `dispute_resolution` | `wrong_transfer`, contested or high-value `refund_request` |
 | `payments_ops` | `payment_failed`, `duplicate_payment` |
 | `merchant_operations` | `merchant_settlement_delay` |
 | `agent_operations` | `agent_cash_in_issue` |

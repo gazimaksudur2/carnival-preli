@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Language(str, Enum):
@@ -83,14 +83,30 @@ class TransactionItem(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    ticket_id: str
-    complaint: str
+    ticket_id: str = Field(min_length=1, max_length=128)
+    complaint: str = Field(min_length=1, max_length=10000)
     language: Optional[Language] = None
     channel: Optional[Channel] = None
     user_type: Optional[UserType] = None
-    campaign_context: Optional[str] = None
+    campaign_context: Optional[str] = Field(default=None, max_length=256)
     transaction_history: Optional[List[TransactionItem]] = Field(default_factory=list)
     metadata: Optional[dict] = None
+
+    @field_validator("complaint")
+    @classmethod
+    def complaint_not_blank(cls, v: str) -> str:
+        # Pydantic min_length=1 allows whitespace-only strings — catch those here.
+        if not v.strip():
+            raise ValueError("complaint must not be blank")
+        return v
+
+    @field_validator("ticket_id")
+    @classmethod
+    def ticket_id_printable(cls, v: str) -> str:
+        # Reject control characters; ticket_id is echoed directly in the response.
+        if not v.strip() or any(ord(c) < 32 for c in v):
+            raise ValueError("ticket_id must contain only printable characters")
+        return v
 
 
 class AnalyzeResponse(BaseModel):
