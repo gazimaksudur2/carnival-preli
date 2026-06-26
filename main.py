@@ -48,12 +48,17 @@ app = FastAPI(
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
+    # Pydantic v2 ctx may carry ValueError objects which are not JSON-serializable — keep only safe fields.
+    safe_errors = [
+        {"loc": list(err.get("loc", [])), "msg": err.get("msg", ""), "type": err.get("type", "")}
+        for err in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
         content={
             "error": "VALIDATION_ERROR",
             "message": "Invalid request body. Check required fields and enum values.",
-            "details": exc.errors(),
+            "details": safe_errors,
             "statusCode": 422,
         },
     )

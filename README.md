@@ -11,6 +11,9 @@ A FastAPI service that investigates customer complaints for a digital finance pl
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Local Development](#local-development)
+- [Running Tests](#running-tests)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Docker](#docker)
 - [API Reference](#api-reference)
 - [AI Approach](#ai-approach)
 - [Safety Logic](#safety-logic)
@@ -97,6 +100,113 @@ Verify:
 ```bash
 curl http://localhost:8000/health
 # {"status":"ok"}
+```
+
+---
+
+## Running Tests
+
+```bash
+# Install test dependencies (once)
+pip install pytest pytest-asyncio httpx
+
+# Run the full suite
+pytest tests/ -v
+```
+
+Tests cover:
+
+| Test area | What is verified |
+|---|---|
+| Health endpoint | `GET /health` returns `{"status":"ok"}` with HTTP 200 |
+| Schema validation | Missing `ticket_id` / blank `complaint` → HTTP 422 |
+| Pydantic enum guards | Invalid `channel` / `user_type` values → HTTP 422 |
+| Ticket ID safety | Control characters in `ticket_id` → HTTP 422 |
+| Fallback response shape | Timeout / API failure → valid `AnalyzeResponse` with `human_review_required: true` |
+| Safety guardrail | Customer reply containing forbidden phrases is replaced with the safe fallback |
+| Phishing detection | Complaint with OTP/PIN keywords → `case_type: phishing_or_social_engineering` |
+| High-value escalation | Transaction ≥ 5000 BDT → severity escalated to at least `high` |
+
+---
+
+## CI/CD Pipeline
+
+GitHub Actions runs on every push to `main`/`dev` and on every pull request targeting `main`.
+
+**`.github/workflows/ci.yml`** — two jobs:
+
+### Job 1 — `test`: Lint & Unit Tests
+
+1. Checks out the code on `ubuntu-latest`
+2. Sets up Python 3.11 with pip cache
+3. Installs `requirements.txt` + test dependencies (`pytest`, `pytest-asyncio`, `httpx`)
+4. Runs `pytest tests/ -v --tb=short`
+5. Uses `ANTHROPIC_API_KEY` from GitHub Secrets — no key is ever hardcoded
+
+### Job 2 — `docker`: Build & Smoke Test
+
+Runs only after `test` passes (`needs: test`).
+
+1. Builds the Docker image (`docker build -t queuestorm-team:ci .`)
+2. Starts the container with the Anthropic key injected at runtime
+3. Polls `GET /health` for up to 30 seconds
+4. Asserts the response contains `"status":"ok"`
+5. Stops and removes the container regardless of outcome
+
+**To add the secret:**
+
+1. Go to your repository on GitHub
+2. **Settings → Secrets and variables → Actions → New repository secret**
+3. Name: `ANTHROPIC_API_KEY`, Value: your key
+
+The CI badge reflects the status of the latest `main` push.
+
+---
+
+## Docker
+
+### Build
+
+```bash
+docker build -t queuestorm-team .
+```
+
+### Run with an env file
+
+```bash
+docker run -p 8000:8000 --env-file judging.env queuestorm-team
+```
+
+### Run with inline environment variables
+
+```bash
+docker run -p 8000:8000 \
+  -e LLM_PROVIDER=anthropic \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ANTHROPIC_MODEL=claude-sonnet-4-6 \
+  queuestorm-team
+```
+
+### Switch to OpenAI
+
+```bash
+docker run -p 8000:8000 \
+  -e LLM_PROVIDER=openai \
+  -e OPENAI_API_KEY=sk-... \
+  -e OPENAI_MODEL=gpt-4o \
+  queuestorm-team
+```
+
+### What the Dockerfile does
+
+```
+python:3.11-slim          # Minimal base — under 500 MB final image
+adduser appuser           # Non-root user for defence-in-depth
+COPY requirements.txt     # Dependencies cached as a separate layer
+pip install               # Cached on rebuild unless requirements change
+COPY . .                  # Source copied last so cache is maximally reused
+USER appuser              # Drop root before the process starts
+uvicorn --workers 1       # Single worker — stateless, I/O-bound, contest infra
 ```
 
 ---
@@ -211,35 +321,54 @@ Accepts one complaint with transaction history and returns a full investigation 
 Each request follows this investigation sequence:
 
 1. **Read** the complaint text (supports English, Bangla, Banglish)
-2. **Scan** each transaction in `transaction_history`
-3. **Match** — find the transaction the complaint most likely refers to → `relevant_transaction_id`
-4. **Verify** — does the transaction data support or contradict the complaint? → `evidence_verdict`
-5. **Classify** → `case_type` and `severity`
-6. **Route** → `department`
-7. **Summarize** → `agent_summary` (1–2 sentences for the support agent)
-8. **Act** → `recommended_next_action` (one operational step)
-9. **Reply** → `customer_reply` (safe, professional, no credential requests)
-10. **Escalate** → set `human_review_required: true` for disputes, fraud, high-value, or ambiguous cases
+2. **Deduplicate** transactions by `transaction_id` before processing
+3. **Detect** phishing keywords in Python before sending to the LLM — override happens regardless of model output
+4. **Scan** each transaction in `transaction_history`
+5. **Match** — find the transaction the complaint most likely refers to → `relevant_transaction_id`
+6. **Verify** — does the transaction data support or contradict the complaint? → `evidence_verdict`
+7. **Classify** → `case_type` and `severity`
+8. **Route** → `department`
+9. **Summarize** → `agent_summary` (1–2 sentences for the support agent)
+10. **Act** → `recommended_next_action` (one operational step)
+11. **Reply** → `customer_reply` (safe, professional, no credential requests)
+12. **Escalate** → set `human_review_required: true` for disputes, fraud, high-value, or ambiguous cases
+13. **Post-process** — Python layer enforces high-value escalation and sanitises the reply before returning
 
-**Prompt injection resistance:** The system prompt explicitly instructs the LLM to treat the `complaint` field as raw customer text only and never follow instructions embedded inside it. A secondary validation layer checks the output for safety rule violations before returning it to the caller.
+**Prompt injection resistance:** The system prompt explicitly instructs the LLM to treat the `complaint` field as raw customer text only and never follow instructions embedded inside it. A secondary validation layer in Python checks the output for safety rule violations before returning it to the caller.
 
-**Fallback behavior:** If the LLM times out (25s limit, 5s before the harness cutoff) or returns unparseable output, the service returns a valid fallback response with `case_type: "other"` and `human_review_required: true` rather than a 500 error.
+**Fallback behavior:** If the LLM times out (25 s limit, 5 s before the harness cutoff) or returns unparseable output, the service attempts one JSON-only retry with the remaining time budget. If that also fails, it returns a valid fallback response with `case_type: "other"` and `human_review_required: true` rather than a 500 error.
+
+**Timeout budget split:** `REQUEST_TIMEOUT` (default 25 s) is split 88%/12% between the main attempt and the JSON-retry. This ensures the retry does not exceed the total wall-clock budget.
 
 ---
 
 ## Safety Logic
 
-These rules are enforced in the system prompt and validated on every response before it leaves the service.
+These rules are enforced in the system prompt **and** validated in Python on every response before it leaves the service.
 
 | Rule | Where enforced | Penalty if violated |
 |---|---|---|
-| Never ask for PIN, OTP, password, or card number | System prompt + output check | −15 points |
-| Never confirm a refund, reversal, or recovery without authority | System prompt + output check | −10 points |
+| Never ask for PIN, OTP, password, or card number | System prompt + Python output check | −15 points |
+| Never confirm a refund, reversal, or recovery without authority | System prompt + Python output check | −10 points |
 | Never refer the customer to a suspicious third party | System prompt | −10 points |
 | Ignore instructions embedded in the complaint text | System prompt | Schema/safety violation |
 | No API keys, stack traces, or internal model details in responses | Application layer | API security violation |
 
 Two or more critical violations across hidden test cases → disqualified from finalist pool.
+
+**How the Python safety check works:**
+
+```
+customer_reply
+  → split into individual sentences
+  → each sentence checked for forbidden phrases
+       (e.g. "refund approved", "enter your otp", "provide your pin")
+  → if phrase found AND that sentence contains no negation ("not", "never", "do not")
+       → replace entire reply with the generic safe fallback
+  → otherwise return the reply unchanged
+```
+
+Sentence-level scoping prevents false positives where a sentence like *"We will never ask for your OTP"* would incorrectly trigger the guard.
 
 The `customer_reply` field always uses careful language: *"any eligible amount will be returned through official channels"* — never *"we will refund you"*.
 
@@ -263,7 +392,7 @@ The judge harness uses a two-stage process:
 | Per-request timeout | `POST /analyze-ticket` must complete within 30s |
 | p95 latency | **≤5s** for full credit · ≤15s partial · ≤30s minimal |
 | Failure rate | Valid requests must not return 5xx or invalid JSON |
-| Malformed input | Must return 400, not crash |
+| Malformed input | Must return 400/422, not crash |
 
 Sonnet 4.6 is chosen over Opus specifically to target the ≤5s p95 latency for full performance credit.
 
@@ -283,7 +412,7 @@ The active model is controlled by the `LLM_PROVIDER` environment variable. Both 
 Override the model without touching code:
 ```
 ANTHROPIC_MODEL=claude-opus-4-8
-OPENAI_MODEL=codex-mini-latest
+OPENAI_MODEL=gpt-4o-mini
 ```
 
 **Cost reasoning:** Each request sends approximately 800–1200 input tokens (system prompt + complaint + transaction history) and receives ~400 output tokens. At Sonnet 4.6 or GPT-4o pricing this is well under $0.01 per ticket — appropriate for a hackathon evaluation with ~50–100 hidden test cases.
@@ -302,6 +431,7 @@ OPENAI_MODEL=codex-mini-latest
 | Server | Uvicorn | ASGI server, works cleanly in Docker |
 | Container | Docker (python:3.11-slim) | Reproducible deployment, under 500 MB image |
 | Python | 3.11 | Stable, good async support, widely available in base images |
+| CI | GitHub Actions | Automated lint, unit tests, and Docker smoke test on every push |
 
 ---
 
@@ -325,23 +455,74 @@ Copy `.env.example` to `.env` and fill in the key for your chosen provider. Neve
 
 ```
 carnival-preli/
-├── main.py              # FastAPI app — routes and error handlers only
-├── models.py            # Pydantic request and response schemas
-├── analyzer.py          # Claude API call, prompt logic, fallback handling
-├── requirements.txt     # Python dependencies
-├── Dockerfile           # Container build
-├── .env.example         # Environment variable template
-├── README.md            # This file
-├── CLAUDE.md            # Project coding rules
-├── requirement.md       # API contract and field reference
-└── plan.md              # Implementation plan and edge cases
+├── main.py                        # FastAPI app — routes and error handlers only
+├── models.py                      # Pydantic request and response schemas
+├── analyzer.py                    # LLM call, prompt logic, safety checks, fallback handling
+├── tests/
+│   └── test_api.py                # Pytest suite — schema, safety, fallback, phishing, high-value
+├── .github/
+│   └── workflows/
+│       └── ci.yml                 # GitHub Actions: lint + tests + Docker smoke test
+├── requirements.txt               # Python dependencies
+├── Dockerfile                     # Container build — non-root user, layer-cached deps
+├── .env.example                   # Environment variable template — committed, no real secrets
+├── .gitignore                     # Excludes .env, venv, __pycache__, *.pyc
+├── README.md                      # This file
+├── CLAUDE.md                      # Project coding rules for AI-assisted development
+├── requirement.md                 # API contract and field reference from the organiser
+└── plan.md                        # Implementation plan and edge cases
 ```
+
+### Responsibility split
+
+| File | Single responsibility |
+|---|---|
+| `main.py` | HTTP routing, error handlers, startup validation — no business logic |
+| `models.py` | Pydantic data shapes and field validators — no I/O |
+| `analyzer.py` | LLM interaction, prompt construction, safety post-processing — no FastAPI imports |
+| `tests/test_api.py` | Black-box API tests via `httpx.TestClient` |
 
 ---
 
 ## Sample Output
 
-The file `sample_output.json` in this repository contains one request/response pair generated from the public sample case pack (`SUST_Preli_Sample_Cases.json`). It demonstrates the exact JSON shape the service produces.
+The file `sample_output.json` contains one request/response pair generated from the public sample case pack. It demonstrates the exact JSON shape the service produces.
+
+```json
+{
+  "input": {
+    "ticket_id": "TKT-20240615-001",
+    "complaint": "I sent 5000 taka to +8801712345678 but my account was debited and the recipient says they never received it. The app showed 'transaction failed' after I submitted.",
+    "language": "en",
+    "channel": "in_app_chat",
+    "user_type": "customer",
+    "transaction_history": [
+      {
+        "transaction_id": "TXN-2024-88821",
+        "timestamp": "2024-06-15T14:08:22Z",
+        "type": "transfer",
+        "amount": 5000,
+        "counterparty": "+8801712345678",
+        "status": "failed"
+      }
+    ]
+  },
+  "output": {
+    "ticket_id": "TKT-20240615-001",
+    "relevant_transaction_id": "TXN-2024-88821",
+    "evidence_verdict": "consistent",
+    "case_type": "payment_failed",
+    "severity": "high",
+    "department": "payments_ops",
+    "agent_summary": "Customer reports a failed ৳5,000 transfer to +8801712345678 where their account was debited but the recipient did not receive funds. Transaction TXN-2024-88821 confirms the transfer failed, consistent with the complaint.",
+    "recommended_next_action": "Verify whether the ৳5,000 deduction was reversed in the ledger; if not reversed, initiate a manual reversal and notify the customer once completed.",
+    "customer_reply": "Dear valued customer, thank you for reporting this issue. We have identified the transaction in question and our payments team is investigating whether the deduction was properly reversed. We will update you within 24 hours.",
+    "human_review_required": true,
+    "confidence": 0.93,
+    "reason_codes": ["failed_transfer", "amount_debited_not_credited", "high_value_transaction"]
+  }
+}
+```
 
 ---
 
@@ -359,9 +540,11 @@ All data used is synthetic. No real customer or payment data is present anywhere
 - Complaints reference at most one transaction from the provided history. When multiple could match, the service picks the closest match by amount, type, and timestamp.
 - The `transaction_history` array is pre-filtered by the caller to the customer's own transactions — the service does not validate ownership.
 - Bangla and Banglish inputs are handled by Claude directly. No preprocessing or transliteration is applied.
+- For `duplicate_payment` cases, `relevant_transaction_id` points to the second (later) transaction — the suspected duplicate — not the original.
 
 **Known limitations:**
 - The 1500-character complaint truncation may drop context for unusually long complaints. The `agent_summary` will note when truncation occurred.
 - `confidence` is a model self-reported estimate, not a calibrated probability.
 - The service is stateless — it does not remember prior tickets for the same customer. Each call is independent.
 - If the Anthropic API is unavailable, all requests return a fallback response. There is no local model fallback.
+- The JSON-retry budget (12% of `REQUEST_TIMEOUT`, ~3 s at the default) is intentionally small. A second full retry would risk exceeding the 30 s harness cutoff.
