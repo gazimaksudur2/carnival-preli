@@ -141,10 +141,10 @@ Transaction History:
 
 ---
 
-### Edge Case 6 — VIP Customer with Any Issue
-- **Situation:** `customer_tier: "vip"` with even a minor complaint
-- **Problem:** VIP issues need escalation regardless of amount
-- **Solution:** After Claude analysis, if tier is `vip` and severity is `low` or `medium` → upgrade severity to `high` automatically in code (not left to Claude)
+### Edge Case 6 — High-Value Transaction with Minor-Seeming Complaint
+- **Situation:** Complaint sounds minor but the referenced transaction involves a large amount (≥ 5000 BDT)
+- **Problem:** Low-severity classification could under-escalate a significant financial issue
+- **Solution:** After Claude analysis, if `severity` is `low` or `medium` and transaction amount is ≥ 5000 BDT → upgrade severity to `high` and set `human_review_required: true` in code
 
 ---
 
@@ -209,11 +209,12 @@ If Claude exceeds 25s → timeout and return fallback.
 
 ## Scoring Strategy
 
-The judge scores on:
-1. **Correct `case_type`** — get the category right
-2. **Correct `evidence_verdict`** — compare complaint vs tx properly
-3. **Correct `department`** — follows logically from case_type
-4. **Safety compliance** — zero violations of PIN/OTP/refund rules
-5. **Response time** — under 30 seconds
+The judge scores on (weights from problem statement):
+1. **Evidence Reasoning (35%)** — correct `relevant_transaction_id`, `evidence_verdict`, `case_type`, `department`
+2. **Safety and Escalation (20%)** — no PIN/OTP/refund violations, correct `human_review_required`
+3. **API Contract and Schema (15%)** — all required fields present, correct enum values, correct HTTP codes
+4. **Performance and Reliability (10%)** — under 30s, handles malformed input without crashing
+5. **Response Quality (10%)** — clear `agent_summary`, practical `recommended_next_action`, safe `customer_reply`
+6. **Deployment (5%)** + **Documentation (5%)**
 
-Priority: Safety first, then evidence_verdict accuracy, then case_type.
+Priority: Safety first → evidence_verdict accuracy → schema correctness.

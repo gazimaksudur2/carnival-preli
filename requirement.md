@@ -165,7 +165,8 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 - Response must arrive within **30 seconds** (judge harness timeout)
 - Must use **Claude AI** for the analysis (not rule-based logic)
-- Input/output JSON must match the exact schema above
+- Input/output JSON must match the exact schema above — field names must be exact
+- Enum values must match exactly (wrong case or alternate spelling = schema violation)
 - Server must start cleanly with `docker run` or `uvicorn main:app`
 
 ---
