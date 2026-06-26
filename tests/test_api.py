@@ -167,11 +167,12 @@ class TestSafetyGuardrails:
 
 class TestFallback:
     def test_analyze_ticket_returns_fallback_on_exception(self):
-        # When analyze_ticket raises, the global handler must return 500 — not crash.
+        # TestClient re-raises by default — disable to let the global handler produce a 500 response.
+        error_client = TestClient(app, raise_server_exceptions=False)
         with patch("main.analyze_ticket", side_effect=RuntimeError("LLM unavailable")):
-            response = client.post("/analyze-ticket", json=_BASE_REQUEST)
+            response = error_client.post("/analyze-ticket", json=_BASE_REQUEST)
         assert response.status_code == 500
         data = response.json()
-        # Must not expose the raw exception message.
+        # Global handler must not leak the raw exception message to the caller.
         assert "LLM unavailable" not in str(data)
-        assert "error" in data or "detail" in data
+        assert "error" in data
