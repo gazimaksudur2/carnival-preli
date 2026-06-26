@@ -55,7 +55,7 @@ SAFETY RULES — you MUST follow these absolutely:
 ANALYSIS PROCESS:
 1. Read the complaint text carefully
 2. Read each transaction in transaction_history
-3. Cross-reference complaint vs transactions to identify relevant_transaction_id (exact ID from the list, or null)
+3. Cross-reference complaint vs transactions to identify relevant_transaction_id (exact ID from the list, or null). If multiple transactions could plausibly match and you cannot determine which one is correct without more information from the customer, set relevant_transaction_id to null and set evidence_verdict to insufficient_data. For duplicate_payment cases, relevant_transaction_id must point to the suspected duplicate — the second (later) transaction, not the first (original).
 4. Determine evidence_verdict: consistent / inconsistent / insufficient_data
 5. Identify the case_type from the complaint context
 6. Determine severity: low (minor/no loss) / medium (small amount) / high (significant loss) / critical (large fraud/VIP)
@@ -222,7 +222,15 @@ def _safe_customer_reply(reply: str) -> str:
     Guardrails are enforced in the prompt; this is a defence-in-depth check.
     """
     lower = reply.lower()
-    if any(phrase in lower for phrase in FORBIDDEN_REPLY_PHRASES):
+    negations = ("not ", "never ", "don't ", "do not ", "never ask")
+    for phrase in FORBIDDEN_REPLY_PHRASES:
+        idx = lower.find(phrase)
+        if idx == -1:
+            continue
+        # Allow the phrase when preceded by a negation — e.g. "do not share your OTP" is safe.
+        prefix = lower[max(0, idx - 15):idx]
+        if any(neg in prefix for neg in negations):
+            continue
         return (
             "Thank you for contacting us. We have received your complaint and "
             "our team is investigating. We will update you on the outcome as "
