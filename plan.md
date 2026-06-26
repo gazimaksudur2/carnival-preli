@@ -20,7 +20,7 @@
   - Safety guardrails (never ask PIN/OTP, never approve refund, no third-party referral)
   - Output: strictly JSON matching response schema
 - Format user message: complaint + transaction_history as structured text
-- Call Claude API (claude-opus-4-8) with the message
+- Call Claude API (claude-sonnet-4-6) with the message
 - Parse the JSON response from Claude
 - Return mapped `AnalyzeResponse` object
 
@@ -188,7 +188,8 @@ Transaction History:
 ### Edge Case 12 — Complaint in Bangla (Mixed Language)
 - **Situation:** Customer writes complaint in Bangla or Banglish
 - **Problem:** Claude may misclassify due to language
-- **Solution:** Claude (Opus 4.8) handles multilingual input well. System prompt instructs: "The complaint may be in English, Bangla, or a mix. Analyze it regardless of language. Always respond in English JSON."
+- **Solution:** Claude (Sonnet 4.6) handles multilingual input well. System prompt instructs: "The complaint may be in English, Bangla, or a mix. Analyze it regardless of language. Always respond in English JSON."
+- **Why it matters:** Bangla/Banglish handling quality is tie-breaker #6 in the rubric — correctness here can separate close teams in the shortlist
 
 ---
 
@@ -198,23 +199,76 @@ Transaction History:
 |------|---------------|
 | Request parsing + validation | ~10ms |
 | Building Claude prompt | ~5ms |
-| Claude API call (Opus 4.8) | ~8–20s |
+| Claude API call (Sonnet 4.6) | ~3–15s |
 | Parsing Claude response | ~10ms |
 | Pydantic validation + return | ~10ms |
-| **Total** | **~8–21s** (safe margin) |
+| **Total** | **~3–16s** (target p95 ≤5s for full latency credit) |
 
-If Claude exceeds 25s → timeout and return fallback.
+Latency scoring: ≤5s = full credit · ≤15s = partial · ≤30s = minimal.
+If Claude exceeds 25s → timeout and return fallback. Sonnet 4.6 is chosen over Opus partly to hit the ≤5s p95 target.
 
 ---
 
 ## Scoring Strategy
 
-The judge scores on (weights from problem statement):
-1. **Evidence Reasoning (35%)** — correct `relevant_transaction_id`, `evidence_verdict`, `case_type`, `department`
-2. **Safety and Escalation (20%)** — no PIN/OTP/refund violations, correct `human_review_required`
-3. **API Contract and Schema (15%)** — all required fields present, correct enum values, correct HTTP codes
-4. **Performance and Reliability (10%)** — under 30s, handles malformed input without crashing
-5. **Response Quality (10%)** — clear `agent_summary`, practical `recommended_next_action`, safe `customer_reply`
-6. **Deployment (5%)** + **Documentation (5%)**
+### Two-Stage Evaluation
 
-Priority: Safety first → evidence_verdict accuracy → schema correctness.
+**Stage 1 — Automated (all teams):** Evidence reasoning, safety, schema correctness, performance, deployment reachability. This produces the shortlist.
+
+**Stage 2 — Manual (shortlisted teams only):** Response quality, documentation, solution explanation, originality checks. Response Quality and Documentation scores only count if Stage 1 gets you shortlisted.
+
+### Category Weights
+
+| # | Category | Weight | How judged |
+|---|----------|--------|------------|
+| 1 | Evidence Reasoning | 35% | Automated — exact or policy-based scoring for `relevant_transaction_id`, `evidence_verdict`, `case_type`, `department`, `severity`, `human_review_required` |
+| 2 | Safety & Escalation | 20% | Automated + Manual — avoids credential requests, unsafe refund promises, escalates suspicious cases |
+| 3 | API Contract & Schema | 15% | Automated — required fields, valid JSON, correct types, enum values, HTTP status codes |
+| 4 | Performance & Reliability | 10% | Automated + Manual — p95 latency, timeout rate, failure rate, malformed-input handling, API security |
+| 5 | Response Quality | 10% | Manual (shortlisted only) — useful summary, practical next action, safe customer reply |
+| 6 | Deployment | 5% | Automated + Review — endpoint reachable or Docker fallback runs cleanly |
+| 7 | Documentation | 5% | Manual (shortlisted only) — setup, model choices, safety logic, limitations |
+
+### Tie-Breakers (in priority order)
+1. Safety score and absence of critical violations
+2. Evidence reasoning score
+3. API/schema validity
+4. API reliability, timeout behaviour, deployment stability
+5. Exceptional implementation (cost-aware model, caching, monitoring, robust fallback)
+6. Bangla/Banglish handling quality
+7. Documentation quality and manual verification results
+8. 90-second architectural overview video
+
+### Safety Penalties
+| Violation | Penalty |
+|-----------|---------|
+| Asks for PIN, OTP, password, card number | −15 points |
+| Confirms refund, reversal, or recovery without authority | −10 points |
+| Refers customer to suspicious third parties | −10 points |
+| Two or more critical violations | Disqualified from finalist pool |
+
+**Build priority:** Schema + endpoints first → evidence reasoning → safety guardrails → reliability → README + video.
+
+---
+
+## Final Pre-Submit Checklist
+
+Run this in order before submitting. Do not skip steps.
+
+- [ ] Problem statement read and implementation aligned with the required schema
+- [ ] `GET /health` and `POST /analyze-ticket` tested successfully with sample JSON
+- [ ] Safety guardrails tested against OTP/PIN/refund/reversal cases manually
+- [ ] `evidence_verdict`, `relevant_transaction_id`, `case_type`, `department` verified on at least 3 sample cases
+- [ ] Service handles empty `transaction_history` — returns valid JSON, no crash
+- [ ] Service handles malformed request body — returns 400, no crash
+- [ ] Docker image builds with `docker build -t queuestorm-team .`
+- [ ] Docker image size is under 500 MB (`docker images queuestorm-team`)
+- [ ] `docker run -p 8000:8000 --env-file judging.env queuestorm-team` starts cleanly
+- [ ] `/health` responds within 60 seconds of container start
+- [ ] Both endpoints tested from outside the container before submitting
+- [ ] `sample_output.json` generated from a public sample case and committed
+- [ ] GitHub repository is public, or `bipulhf` added as collaborator with read access
+- [ ] No real secrets anywhere in the repository — run `git log -p | grep -i "sk-\|api_key"` to verify
+- [ ] `.env.example` has all required variable names with placeholder values
+- [ ] README complete: setup, run command, AI approach, safety logic, models, limitations
+- [ ] Submission form filled out before the deadline

@@ -126,13 +126,27 @@ The judge harness cuts the connection at 30 seconds. Build with a 5-second buffe
 
 ## Rule 10 — Deployment Must Work Without the Team
 
-The judge may re-deploy the service without asking for help.
+The judge may re-deploy the service without asking for help. These are the exact Docker rules from the manual:
 
-- `Dockerfile` must work with a single `docker build` and `docker run` — no undocumented steps
-- `README.md` must include the exact `docker run` command with the `-e ANTHROPIC_API_KEY=...` flag shown
-- `GET /health` must return `{"status": "ok"}` within 60 seconds of container start — no lazy initialization
-- The service must not crash on malformed JSON input — return 400 with a message
-- Test the Docker build locally before submitting
+```bash
+docker build -t queuestorm-team .
+docker run -p 8000:8000 --env-file judging.env queuestorm-team
+```
+
+**Hard constraints (enforced by judges):**
+- Image size recommended under 500 MB — hard limit is 1 GB
+- No GPU — not allowed
+- No large local model weights — not allowed
+- No multi-GB downloads at runtime — not allowed
+- No runtime training — not allowed
+- Must bind to `0.0.0.0` — not `127.0.0.1`
+- `GET /health` must respond within 60 seconds of container start
+- Secrets must come from `--env-file` only — never baked into the image
+
+**Before submitting:**
+- Test `docker build` locally and confirm the image is under 500 MB
+- Test `docker run` with `--env-file` and verify `/health` and `/analyze-ticket` both respond
+- Test both endpoints from outside the container (not just from inside)
 
 ---
 
@@ -148,9 +162,39 @@ This is a 4.5-hour hackathon. Build what the spec asks for.
 
 ---
 
-## Rule 12 — Git Discipline
+## Rule 12 — Repository Access Policy
+
+The organizer must be able to access the repository at any time during and after the round.
+
+- If the repository is private, add GitHub handle **`bipulhf`** as a collaborator with read access before the deadline
+- The repository must remain accessible until preliminary results are published
+- Never commit real secrets — not in source code, not in commit history, not in README, not in Docker images
+- When sharing API keys for Docker/code judging, use the private submission form field only — not GitHub
+- Rotate or revoke any key shared for judging after evaluation is complete
+
+---
+
+## Rule 13 — Git Discipline
 
 - Commit messages follow Conventional Commits: `feat:`, `fix:`, `chore:`
 - Never commit `.env` — only `.env.example`
 - One commit per logical change: don't bundle the Dockerfile with a prompt fix
 - Before pushing, run `git diff` and verify no secrets are staged
+
+---
+
+## Pre-Submit Checklist (run before every submission)
+
+- [ ] `GET /health` returns `{"status":"ok"}`
+- [ ] `POST /analyze-ticket` accepts the sample JSON and returns all required fields
+- [ ] All enum values match the problem statement exactly (case-sensitive)
+- [ ] Service handles empty `transaction_history` without crashing
+- [ ] Service handles malformed/missing optional fields without crashing
+- [ ] `customer_reply` does not ask for PIN, OTP, password, or card number
+- [ ] `customer_reply` does not promise a refund, reversal, or account recovery
+- [ ] Service responds within 30 seconds on the judge's infrastructure
+- [ ] Docker image builds cleanly and is under 500 MB
+- [ ] `docker run --env-file judging.env` starts the service and `/health` responds within 60s
+- [ ] No real secrets are committed anywhere in the repository
+- [ ] `bipulhf` has read access if the repository is private
+- [ ] `README.md` is complete and `sample_output.json` is present

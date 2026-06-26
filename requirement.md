@@ -171,6 +171,70 @@ ANTHROPIC_API_KEY=your_api_key_here
 
 ---
 
+## API Quality Metrics (from rubric)
+
+| Metric | Expected Standard |
+|--------|------------------|
+| Health readiness | `GET /health` returns `{"status":"ok"}` within 60s of start |
+| Per-request timeout | `POST /analyze-ticket` must complete within 30s |
+| p95 latency | Full credit ≤5s · Partial credit ≤15s · Minimal credit ≤30s |
+| Failure rate | Valid requests must not return 5xx, invalid JSON, or no response |
+| Schema validity | Responses must match required output schema and enum values exactly |
+| Malformed input | Return controlled 400 error or safe fallback — never crash |
+| Secret handling | No API keys, tokens, stack traces, or sensitive values in repo, logs, or responses |
+
+---
+
+## Scoring Weights
+
+| # | Category | Weight | Stage |
+|---|----------|--------|-------|
+| 1 | Evidence Reasoning | 35% | Automated |
+| 2 | Safety & Escalation | 20% | Automated + Manual |
+| 3 | API Contract & Schema | 15% | Automated |
+| 4 | Performance & Reliability | 10% | Automated + Manual |
+| 5 | Response Quality | 10% | Manual (shortlisted only) |
+| 6 | Deployment & Reproducibility | 5% | Automated + Review |
+| 7 | Documentation | 5% | Manual (shortlisted only) |
+
+Response Quality and Documentation are only reviewed for shortlisted teams. The first filter is automated.
+
+---
+
+## Safety Penalties
+
+| Violation | Penalty |
+|-----------|---------|
+| Asks for PIN, OTP, password, full card number | −15 points |
+| Confirms refund, reversal, or account recovery without authority | −10 points |
+| Instructs customer to contact suspicious third parties | −10 points |
+| Two or more critical safety violations | Not eligible for top-40 finalist pool |
+
+---
+
+## Tie-Breakers (in priority order)
+
+1. Safety score and absence of critical violations
+2. Evidence reasoning score
+3. API/schema validity
+4. API reliability, timeout behaviour, deployment stability
+5. Exceptional implementation (cost-aware model, caching, monitoring, robust fallback)
+6. Bangla/Banglish handling quality — local-language robustness matters when scores are close
+7. Documentation quality and manual verification results
+8. 90-second architectural overview video
+
+---
+
+## Bangla / Banglish Handling
+
+Complaints may arrive in English, Bangla, or Banglish. The service must:
+- Analyze the complaint correctly regardless of language
+- Always return the JSON response fields in English
+- Not apply any preprocessing or transliteration — Claude handles multilingual input natively
+- This is a tie-breaker criterion when scores are close — quality matters here
+
+---
+
 ## Tech Stack
 
 - **FastAPI** — web framework
@@ -178,3 +242,48 @@ ANTHROPIC_API_KEY=your_api_key_here
 - **anthropic** — Python SDK for Claude API
 - **uvicorn** — ASGI server
 - **Python 3.11+**
+
+---
+
+## Testing Checklist Before Submission
+
+Run every item below before submitting. All are required.
+
+| Check | Required |
+|---|---|
+| `GET /health` returns `{"status":"ok"}` | Yes |
+| `POST /analyze-ticket` accepts sample JSON | Yes |
+| Response contains all required fields | Yes |
+| Enum values match the problem statement exactly (case-sensitive) | Yes |
+| Service handles empty or missing `transaction_history` without crashing | Yes |
+| Service handles malformed or non-critical missing fields without crashing | Yes |
+| `customer_reply` does not ask for PIN, OTP, password, or card number | Yes |
+| `customer_reply` does not promise refund, reversal, recovery, or account unblock | Yes |
+| Endpoint responds within 30 seconds | Yes |
+| Docker image builds and runs with `--env-file judging.env` | Yes |
+| `GET /health` responds within 60 seconds of container start | Yes |
+| README is complete | Yes |
+| `sample_output.json` is present in the repository | Yes |
+| No real secrets committed anywhere in the repository | Yes |
+
+---
+
+## Submission Form Checklist
+
+All fields required in the submission form:
+
+| Field | Required | Notes |
+|---|---|---|
+| Team name and team ID | Yes | Use registered team information |
+| GitHub repository URL | Yes | Public, or private with `bipulhf` added as collaborator |
+| Submission path | Yes | Live URL / Docker fallback / Code-only |
+| Public endpoint base URL | If live URL | e.g. `https://your-service.example.com` |
+| Docker build/run command | If Docker fallback | Include `--env-file` usage |
+| Required environment variable names | If applicable | Names only — not real values |
+| Secrets for judging | Only if needed | Use the private form field, never GitHub |
+| Sample request and sample response | Yes | Can be in README or `sample_output.json` |
+| AI/model usage explanation | Yes | Which model, where it runs, why |
+| Safety logic explanation | Yes | How PIN/OTP/refund guardrails are enforced |
+| Known limitations | Yes | Be honest about edge cases and failure modes |
+| No real customer data confirmation | Yes | Only synthetic data used |
+| No secrets committed confirmation | Yes | Written confirmation required |

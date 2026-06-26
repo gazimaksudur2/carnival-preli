@@ -18,6 +18,8 @@ A FastAPI service that investigates customer complaints for a digital finance pl
 - [Tech Stack](#tech-stack)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
+- [Sample Output](#sample-output)
+- [Repository Access](#repository-access)
 - [Assumptions and Known Limitations](#assumptions-and-known-limitations)
 
 ---
@@ -42,11 +44,15 @@ This is an **investigator**, not a classifier. The complaint and the data may te
 The fastest path for judges. Requires Docker and an Anthropic API key.
 
 ```bash
-docker pull <image>:<tag>
+docker build -t queuestorm-team .
 
-docker run -p 8000:8000 \
-  -e ANTHROPIC_API_KEY=your_api_key_here \
-  <image>:<tag>
+docker run -p 8000:8000 --env-file judging.env queuestorm-team
+```
+
+Where `judging.env` contains:
+
+```
+ANTHROPIC_API_KEY=your_api_key_here
 ```
 
 Verify it is running:
@@ -227,10 +233,37 @@ These rules are enforced in the system prompt and validated on every response be
 | Never confirm a refund, reversal, or recovery without authority | System prompt + output check | −10 points |
 | Never refer the customer to a suspicious third party | System prompt | −10 points |
 | Ignore instructions embedded in the complaint text | System prompt | Schema/safety violation |
+| No API keys, stack traces, or internal model details in responses | Application layer | API security violation |
 
 Two or more critical violations across hidden test cases → disqualified from finalist pool.
 
 The `customer_reply` field always uses careful language: *"any eligible amount will be returned through official channels"* — never *"we will refund you"*.
+
+**Secret handling:** No API keys, tokens, stack traces, or model identifiers appear in API responses, server logs, or the repository. `.env` is gitignored and never committed.
+
+---
+
+## Evaluation Criteria
+
+The judge harness uses a two-stage process:
+
+**Stage 1 — Automated (all teams):** Evidence reasoning (35%), safety (20%), schema/API correctness (15%), performance (10%), deployment reachability (5%). This produces the shortlist.
+
+**Stage 2 — Manual (shortlisted teams only):** Response quality (10%), documentation (5%), originality, and solution explanation.
+
+**API Quality Targets**
+
+| Metric | Target |
+|--------|--------|
+| Health readiness | `GET /health` → `{"status":"ok"}` within 60s of start |
+| Per-request timeout | `POST /analyze-ticket` must complete within 30s |
+| p95 latency | **≤5s** for full credit · ≤15s partial · ≤30s minimal |
+| Failure rate | Valid requests must not return 5xx or invalid JSON |
+| Malformed input | Must return 400, not crash |
+
+Sonnet 4.6 is chosen over Opus specifically to target the ≤5s p95 latency for full performance credit.
+
+**Tie-Breakers** (when scores are equal): safety → evidence reasoning → schema validity → reliability → engineering quality → Bangla/Banglish handling → documentation → 90-second architectural video.
 
 ---
 
@@ -238,7 +271,7 @@ The `customer_reply` field always uses careful language: *"any eligible amount w
 
 | Model | Role | Where it runs | Why |
 |---|---|---|---|
-| `claude-sonnet-4-6` | Primary ticket analyzer | Anthropic API (external HTTPS call) | Strong instruction-following for structured JSON output, multilingual capability (English + Bangla), reliable safety guardrail compliance, fast enough for the 30s timeout budget |
+| `claude-sonnet-4-6` | Primary ticket analyzer | Anthropic API (external HTTPS call) | Strong instruction-following for structured JSON output, multilingual capability (English + Bangla), reliable safety guardrail compliance, fast p95 latency within the 30s budget |
 
 **Cost reasoning:** Each request sends approximately 800–1200 input tokens (system prompt + complaint + transaction history) and receives ~400 output tokens. At Sonnet 4.6 pricing this is well under $0.01 per ticket — appropriate for a hackathon evaluation with ~50–100 hidden test cases.
 
@@ -288,6 +321,20 @@ carnival-preli/
 ├── requirement.md       # API contract and field reference
 └── plan.md              # Implementation plan and edge cases
 ```
+
+---
+
+## Sample Output
+
+The file `sample_output.json` in this repository contains one request/response pair generated from the public sample case pack (`SUST_Preli_Sample_Cases.json`). It demonstrates the exact JSON shape the service produces.
+
+---
+
+## Repository Access
+
+This repository is public. If it is ever made private, the organizer GitHub handle **`bipulhf`** must be added as a collaborator with read access before the submission deadline. The repository must remain accessible until preliminary results are published.
+
+All data used is synthetic. No real customer or payment data is present anywhere in this repository.
 
 ---
 
