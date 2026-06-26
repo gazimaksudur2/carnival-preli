@@ -471,7 +471,9 @@ carnival-preli/
 ├── README.md                      # This file
 ├── CLAUDE.md                      # Project coding rules for AI-assisted development
 ├── requirement.md                 # API contract and field reference from the organiser
-└── plan.md                        # Implementation plan and edge cases
+├── plan.md                        # Implementation plan and edge cases
+├── sample_in.json                 # Sample request body for manual testing
+└── sample_output.json             # Sample response from the service
 ```
 
 ### Responsibility split
@@ -487,7 +489,7 @@ carnival-preli/
 
 ## Sample Output
 
-The file `sample_output.json` contains one request/response pair generated from the public sample case pack. It demonstrates the exact JSON shape the service produces.
+The files `sample_in.json` and `sample_output.json` contain one request/response pair generated from the public sample case pack. They demonstrate the exact JSON shape the service accepts and produces.
 
 ```json
 {
