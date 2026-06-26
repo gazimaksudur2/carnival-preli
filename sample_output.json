@@ -1,0 +1,33 @@
+{
+  "input": {
+    "ticket_id": "TKT-20240615-001",
+    "complaint": "I sent 5000 taka to +8801712345678 but my account was debited and the recipient says they never received it. The app showed 'transaction failed' after I submitted. Please help.",
+    "language": "en",
+    "channel": "in_app_chat",
+    "user_type": "customer",
+    "transaction_history": [
+      {
+        "transaction_id": "TXN-2024-88821",
+        "timestamp": "2024-06-15T14:08:22Z",
+        "type": "transfer",
+        "amount": 5000,
+        "counterparty": "+8801712345678",
+        "status": "failed"
+      }
+    ]
+  },
+  "output": {
+    "ticket_id": "TKT-20240615-001",
+    "relevant_transaction_id": "TXN-2024-88821",
+    "evidence_verdict": "consistent",
+    "case_type": "payment_failed",
+    "severity": "high",
+    "department": "payments_ops",
+    "agent_summary": "Customer reports a failed ৳5,000 transfer to +8801712345678 where their account was debited but the recipient did not receive funds. Transaction TXN-2024-88821 confirms the transfer failed, consistent with the complaint.",
+    "recommended_next_action": "Verify whether the ৳5,000 deduction was reversed in the ledger; if not reversed, initiate a manual reversal and notify the customer once completed.",
+    "customer_reply": "Dear valued customer, thank you for reporting this issue. We have identified the transaction in question and our payments team is investigating whether the deduction was properly reversed. We will update you within 24 hours. We apologise for the inconvenience caused.",
+    "human_review_required": true,
+    "confidence": 0.93,
+    "reason_codes": ["failed_transfer", "amount_debited_not_credited", "high_value_transaction"]
+  }
+}
