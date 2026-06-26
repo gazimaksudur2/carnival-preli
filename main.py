@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -84,9 +85,9 @@ def health():
 
 
 @app.post("/analyze-ticket", response_model=AnalyzeResponse)
-def analyze_ticket_endpoint(request: AnalyzeRequest):
-    # Sync route — FastAPI runs this in a thread pool, keeping the event loop free.
-    return analyze_ticket(llm_client, provider, request)
+async def analyze_ticket_endpoint(request: AnalyzeRequest):
+    # LLM call is sync (Anthropic/OpenAI SDK) — offload to thread pool to keep the event loop free.
+    return await asyncio.to_thread(analyze_ticket, llm_client, provider, request)
 
 
 if __name__ == "__main__":

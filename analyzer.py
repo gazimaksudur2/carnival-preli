@@ -47,6 +47,14 @@ FORBIDDEN_REPLY_PHRASES = [
     "account unblocked",
 ]
 
+# Patterns that indicate the reply is directing the customer to a third party.
+# The check is phrase-based and combined with the absence of "official" to reduce false positives.
+THIRD_PARTY_REFERRAL_PHRASES = [
+    "contact a third party", "contact another service", "visit a third-party",
+    "go to a third party", "call another company", "contact an external",
+    "use a different service", "try another provider",
+]
+
 SYSTEM_PROMPT = """You are a financial complaint investigator for a mobile banking platform.
 Your job is to analyze customer complaints and cross-reference them with transaction history to determine what actually happened.
 
@@ -224,6 +232,13 @@ def _call_llm(
         return None, "api_error"
 
 
+_SAFE_FALLBACK_REPLY = (
+    "Thank you for contacting us. We have received your complaint and "
+    "our team is investigating. We will update you on the outcome as "
+    "soon as possible."
+)
+
+
 def _safe_customer_reply(reply: str) -> str:
     """
     Replace the reply with a safe fallback if Claude violated any guardrails.
@@ -242,11 +257,13 @@ def _safe_customer_reply(reply: str) -> str:
             # Phrase is present — safe only if the same sentence also contains a negation.
             if any(neg in sentence for neg in negations):
                 continue
-            return (
-                "Thank you for contacting us. We have received your complaint and "
-                "our team is investigating. We will update you on the outcome as "
-                "soon as possible."
-            )
+            return _SAFE_FALLBACK_REPLY
+
+        # Third-party referral check — "official" in the same sentence marks it as safe.
+        for phrase in THIRD_PARTY_REFERRAL_PHRASES:
+            if phrase in sentence and "official" not in sentence:
+                return _SAFE_FALLBACK_REPLY
+
     return reply
 
 
