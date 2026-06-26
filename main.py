@@ -3,6 +3,7 @@ import os
 import sys
 
 import anthropic
+import openai
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,12 +21,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Fail fast at startup rather than surfacing auth errors on every request.
-api_key = os.getenv("ANTHROPIC_API_KEY")
-if not api_key:
-    logger.error("ANTHROPIC_API_KEY is not set. Set it in .env or the environment. Exiting.")
-    sys.exit(1)
+provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
 
-anthropic_client = anthropic.Anthropic(api_key=api_key)
+if provider == "anthropic":
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY is not set. Set it in .env or the environment. Exiting.")
+        sys.exit(1)
+    llm_client = anthropic.Anthropic(api_key=api_key)
+elif provider == "openai":
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("OPENAI_API_KEY is not set. Set it in .env or the environment. Exiting.")
+        sys.exit(1)
+    llm_client = openai.OpenAI(api_key=api_key)
+else:
+    logger.error("Unknown LLM_PROVIDER '%s'. Must be 'anthropic' or 'openai'. Exiting.", provider)
+    sys.exit(1)
 
 app = FastAPI(
     title="QueueStorm Investigator",
@@ -69,7 +81,7 @@ def health():
 @app.post("/analyze-ticket", response_model=AnalyzeResponse)
 def analyze_ticket_endpoint(request: AnalyzeRequest):
     # Sync route — FastAPI runs this in a thread pool, keeping the event loop free.
-    return analyze_ticket(anthropic_client, request)
+    return analyze_ticket(llm_client, provider, request)
 
 
 if __name__ == "__main__":

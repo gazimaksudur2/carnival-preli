@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 import anthropic
-from typing import Optional, Tuple
+import openai
+from typing import Any, Optional, Tuple
 
 from models import (
     AnalyzeRequest,
@@ -160,40 +162,57 @@ def _strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def _call_claude(
-    client: anthropic.Anthropic,
+def _call_llm(
+    client: Any,
+    provider: str,
     user_message: str,
     ticket_id: str,
     timeout: float,
 ) -> Tuple[Optional[dict], Optional[str]]:
     """
-    Call Claude and parse the JSON response.
+    Call the configured LLM provider and parse the JSON response.
     Returns (parsed_dict, None) on success, (None, error_type) on failure.
     error_type is 'timeout', 'api_error', or 'parse_error'.
     """
     try:
-        response = client.with_options(timeout=timeout).messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        if not response.content:
-            logger.warning("Empty content from Claude for ticket %s", ticket_id)
-            return None, "parse_error"
+        if provider == "anthropic":
+            model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+            response = client.with_options(timeout=timeout).messages.create(
+                model=model,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            if not response.content:
+                logger.warning("Empty content from Anthropic for ticket %s", ticket_id)
+                return None, "parse_error"
+            raw = _strip_markdown_fences(response.content[0].text)
+        else:
+            model = os.getenv("OPENAI_MODEL", "gpt-4o")
+            response = client.with_options(timeout=timeout).chat.completions.create(
+                model=model,
+                max_tokens=1024,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+            )
+            if not response.choices:
+                logger.warning("Empty response from OpenAI for ticket %s", ticket_id)
+                return None, "parse_error"
+            raw = _strip_markdown_fences(response.choices[0].message.content or "")
 
-        raw = _strip_markdown_fences(response.content[0].text)
         data = json.loads(raw)
         return data, None
 
-    except anthropic.APITimeoutError:
-        logger.error("Claude API timeout for ticket %s", ticket_id)
+    except (anthropic.APITimeoutError, openai.APITimeoutError):
+        logger.error("%s API timeout for ticket %s", provider, ticket_id)
         return None, "timeout"
     except json.JSONDecodeError as exc:
         logger.warning("JSON parse error for ticket %s: %s", ticket_id, exc)
         return None, "parse_error"
-    except anthropic.APIError as exc:
-        logger.error("Claude API error for ticket %s: %s", ticket_id, exc)
+    except (anthropic.APIError, openai.APIError) as exc:
+        logger.error("%s API error for ticket %s: %s", provider, ticket_id, exc)
         return None, "api_error"
 
 
@@ -233,10 +252,10 @@ def _fallback_response(ticket_id: str, reason: str = "analysis_failed") -> Analy
     )
 
 
-def analyze_ticket(client: anthropic.Anthropic, request: AnalyzeRequest) -> AnalyzeResponse:
+def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> AnalyzeResponse:
     """
     Orchestrates the full complaint analysis pipeline:
-    dedup → keyword detection → Claude call (with one JSON-error retry) →
+    dedup → keyword detection → LLM call (with one JSON-error retry) →
     post-processing (phishing override, high-value escalation, safety check) →
     Pydantic validation.
     """
@@ -246,12 +265,12 @@ def analyze_ticket(client: anthropic.Anthropic, request: AnalyzeRequest) -> Anal
     user_message = _build_user_message(request, transactions)
 
     # First attempt — 22s budget leaves room for the retry if needed.
-    data, error = _call_claude(client, user_message, request.ticket_id, timeout=22.0)
+    data, error = _call_llm(client, provider, user_message, request.ticket_id, timeout=22.0)
 
     if data is None and error == "parse_error":
         # Retry once with an explicit JSON-only reminder.
         retry_message = user_message + "\n\nCRITICAL: Return ONLY valid JSON. No other text."
-        data, error = _call_claude(client, retry_message, request.ticket_id, timeout=6.0)
+        data, error = _call_llm(client, provider, retry_message, request.ticket_id, timeout=6.0)
 
     if data is None:
         # Timeout or unrecoverable failure — return safe fallback.
