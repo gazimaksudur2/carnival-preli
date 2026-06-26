@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 # Complaint text length limit before truncation to control token usage and latency.
 MAX_COMPLAINT_LENGTH = 1500
 
+# Total request budget from env; split 88%/12% across first attempt and JSON-only retry.
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "25"))
+_TIMEOUT_MAIN = REQUEST_TIMEOUT * 0.88
+_TIMEOUT_RETRY = REQUEST_TIMEOUT * 0.12
+
 # Escalate severity to high when any transaction in the complaint exceeds this amount.
 HIGH_VALUE_THRESHOLD = 5000.0
 
@@ -278,13 +283,13 @@ def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> Analy
     max_amount = _max_transaction_amount(transactions)
     user_message = _build_user_message(request, transactions)
 
-    # First attempt — 22s budget leaves room for the retry if needed.
-    data, error = _call_llm(client, provider, user_message, request.ticket_id, timeout=22.0)
+    # First attempt — main budget leaves room for the retry if needed.
+    data, error = _call_llm(client, provider, user_message, request.ticket_id, timeout=_TIMEOUT_MAIN)
 
     if data is None and error == "parse_error":
         # Retry once with an explicit JSON-only reminder.
         retry_message = user_message + "\n\nCRITICAL: Return ONLY valid JSON. No other text."
-        data, error = _call_llm(client, provider, retry_message, request.ticket_id, timeout=6.0)
+        data, error = _call_llm(client, provider, retry_message, request.ticket_id, timeout=_TIMEOUT_RETRY)
 
     if data is None:
         # Timeout or unrecoverable failure — return safe fallback.
@@ -314,7 +319,8 @@ def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> Analy
             data["reason_codes"] = reason_codes
 
     # Defence-in-depth: sanitise customer_reply for safety violations.
-    if "customer_reply" in data:
+    # Guard against null — Claude may return customer_reply: null for non-actionable tickets.
+    if data.get("customer_reply") is not None:
         data["customer_reply"] = _safe_customer_reply(data["customer_reply"])
 
     try:
