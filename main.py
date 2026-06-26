@@ -1,48 +1,71 @@
+"""QueueStorm Investigator -- FastAPI entry point."""
 import asyncio
 import logging
 import os
-import sys
 
-import anthropic
-import openai
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+import anthropic
+import openai
+
 from analyzer import analyze_ticket
 from models import AnalyzeRequest, AnalyzeResponse
 
+
+# Load .env once at import time so os.getenv() in analyzer.py sees the same values.
 load_dotenv()
 
+
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format='{"ts":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}',
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger("queuestorm.main")
 
-# Fail fast at startup rather than surfacing auth errors on every request.
-provider = os.getenv("LLM_PROVIDER", "anthropic").lower()
 
-if provider == "anthropic":
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.error("ANTHROPIC_API_KEY is not set. Set it in .env or the environment. Exiting.")
-        sys.exit(1)
-    llm_client = anthropic.Anthropic(api_key=api_key)
-elif provider == "openai":
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.error("OPENAI_API_KEY is not set. Set it in .env or the environment. Exiting.")
-        sys.exit(1)
-    llm_client = openai.OpenAI(api_key=api_key)
-else:
-    logger.error("Unknown LLM_PROVIDER '%s'. Must be 'anthropic' or 'openai'. Exiting.", provider)
-    sys.exit(1)
+def _provider_label() -> str:
+    return os.getenv("LLM_PROVIDER", "anthropic").lower()
+
+
+# Cache the SDK client so it is instantiated once, not per request.
+_client_cache: dict[str, object] = {}
+
+
+def _get_client(provider: str):
+    """Return a cached SDK client for the active provider."""
+    if provider in _client_cache:
+        return _client_cache[provider]
+    if provider == "openai":
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    elif provider == "anthropic":
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    else:
+        # Unknown provider -- treat as fallback-only, no client needed.
+        client = None
+    _client_cache[provider] = client
+    return client
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    provider = _provider_label()
+    env_var = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
+    if provider not in ("anthropic", "openai"):
+        log.error("startup_unknown_provider provider=%s", provider)
+    elif not os.getenv(env_var):
+        log.warning("startup_no_api_key provider=%s env=%s (fallback only)", provider, env_var)
+    else:
+        log.info("startup_ready provider=%s", provider)
+    yield
+
 
 app = FastAPI(
     title="QueueStorm Investigator",
-    description="AI-powered mobile banking complaint analysis service",
     version="1.0.0",
 )
 
@@ -81,15 +104,35 @@ async def global_error_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "provider": _provider_label(),
+        "fallback_only": not _has_api_key(),
+    }
 
 
 @app.post("/analyze-ticket", response_model=AnalyzeResponse)
 async def analyze_ticket_endpoint(request: AnalyzeRequest):
+    provider = _provider_label()
+    client = _get_client(provider)
+    log.info(
+        "analyze_ticket ticket_id=%s lang=%s history=%d provider=%s",
+        request.ticket_id, request.language, len(request.transaction_history), provider,
+    )
     # LLM call is sync (Anthropic/OpenAI SDK) — offload to thread pool to keep the event loop free.
-    return await asyncio.to_thread(analyze_ticket, llm_client, provider, request)
+    return await asyncio.to_thread(analyze_ticket, client, provider, request)
+
+
+def _has_api_key() -> bool:
+    provider = _provider_label()
+    if provider == "openai":
+        return bool(os.getenv("OPENAI_API_KEY"))
+    return bool(os.getenv("ANTHROPIC_API_KEY"))
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host=host, port=port, log_level=os.getenv("LOG_LEVEL", "info").lower())

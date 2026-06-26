@@ -1,0 +1,10 @@
+{
+  "ticket_id": "TKT-20240615-001",
+  "complaint": "I sent 5000 taka to +8801712345678 but my account was debited and the recipient says they never received it. The app showed transaction failed after I submitted. Please help.",
+  "language": "en",
+  "channel": "in_app_chat",
+  "user_type": "customer",
+  "transaction_history": [
+    {"transaction_id":"TXN-2024-88821","timestamp":"2024-06-15T14:08:22Z","type":"transfer","amount":5000,"counterparty":"+8801712345678","status":"failed"}
+  ]
+}
