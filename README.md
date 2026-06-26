@@ -407,12 +407,12 @@ The active model is controlled by the `LLM_PROVIDER` environment variable. Both 
 | Provider | Default Model | Variable | Where it runs |
 |---|---|---|---|
 | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_MODEL` | Anthropic API (external HTTPS) |
-| `openai` | `gpt-4o` | `OPENAI_MODEL` | OpenAI API (external HTTPS) |
+| `openai` | `gpt-4o-mini` | `OPENAI_MODEL` | OpenAI API (external HTTPS) |
 
 Override the model without touching code:
 ```
 ANTHROPIC_MODEL=claude-opus-4-8
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=gpt-4o
 ```
 
 **Cost reasoning:** Each request sends approximately 800–1200 input tokens (system prompt + complaint + transaction history) and receives ~400 output tokens. At Sonnet 4.6 or GPT-4o pricing this is well under $0.01 per ticket — appropriate for a hackathon evaluation with ~50–100 hidden test cases.
@@ -443,9 +443,10 @@ OPENAI_MODEL=gpt-4o-mini
 | `ANTHROPIC_API_KEY` | If `LLM_PROVIDER=anthropic` | — | Your Anthropic API key |
 | `ANTHROPIC_MODEL` | No | `claude-sonnet-4-6` | Anthropic model ID to use |
 | `OPENAI_API_KEY` | If `LLM_PROVIDER=openai` | — | Your OpenAI API key |
-| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model ID to use |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | OpenAI model ID to use |
 | `PORT` | No | `8000` | Server port |
 | `REQUEST_TIMEOUT` | No | `25` | LLM call timeout in seconds |
+| `LOG_LEVEL` | No | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 Copy `.env.example` to `.env` and fill in the key for your chosen provider. Never commit `.env`.
 

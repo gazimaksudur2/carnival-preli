@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 # Complaint text length limit before truncation to control token usage and latency.
 MAX_COMPLAINT_LENGTH = 1500
 
-# Total request budget from env; split 88%/12% across first attempt and JSON-only retry.
+# Total request budget from env. Reserve 7s for a JSON-only retry; give the rest to the main attempt.
+# 7s is enough for Claude to return a short JSON response on a warm connection.
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "25"))
-_TIMEOUT_MAIN = REQUEST_TIMEOUT * 0.88
-_TIMEOUT_RETRY = REQUEST_TIMEOUT * 0.12
+_TIMEOUT_RETRY = min(7.0, REQUEST_TIMEOUT * 0.30)
+_TIMEOUT_MAIN = REQUEST_TIMEOUT - _TIMEOUT_RETRY
 
 # Escalate severity to high when any transaction in the complaint exceeds this amount.
 HIGH_VALUE_THRESHOLD = 5000.0
@@ -71,12 +72,12 @@ ANALYSIS PROCESS:
 3. Cross-reference complaint vs transactions to identify relevant_transaction_id (exact ID from the list, or null). If multiple transactions could plausibly match and you cannot determine which one is correct without more information from the customer, set relevant_transaction_id to null and set evidence_verdict to insufficient_data. For duplicate_payment cases, relevant_transaction_id must point to the suspected duplicate — the second (later) transaction, not the first (original).
 4. Determine evidence_verdict: consistent / inconsistent / insufficient_data
 5. Identify the case_type from the complaint context
-6. Determine severity: low (minor/no loss) / medium (small amount) / high (significant loss) / critical (large fraud/VIP)
+6. Determine severity using these BDT thresholds: low (no financial loss or < 500 BDT) / medium (500–4999 BDT) / high (5000–49999 BDT or service disruption) / critical (≥ 50000 BDT, confirmed fraud, or VIP customer)
 7. Route to the correct department based on case_type
 8. Write agent_summary (1-2 sentences for the support agent, referencing the transaction if relevant)
 9. Write recommended_next_action (one concrete operational step for the agent)
 10. Write customer_reply (polite, safe — no PIN/OTP requests, no refund promises, no third-party referrals)
-11. Set human_review_required: true for disputes, fraud, high-value, inconsistent evidence, or any ambiguity
+11. Set human_review_required: MANDATORY true when case_type is wrong_transfer, phishing_or_social_engineering, or when evidence_verdict is inconsistent or insufficient_data. Also true for high/critical severity or any ambiguity. Only false for clear low-severity cases with consistent evidence and no dispute.
 12. Set confidence (0.0–1.0) and reason_codes (short descriptive strings)
 
 DEPARTMENT ROUTING:
@@ -325,6 +326,21 @@ def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> Analy
             reason_codes.append("phishing_keywords_detected")
         data["reason_codes"] = reason_codes
 
+    # Spec mandates human_review_required=true for these cases regardless of LLM output.
+    MANDATORY_REVIEW_CASE_TYPES = {
+        CaseType.WRONG_TRANSFER.value,
+        CaseType.PHISHING_OR_SOCIAL_ENGINEERING.value,
+    }
+    MANDATORY_REVIEW_EVIDENCE = {
+        EvidenceVerdict.INCONSISTENT.value,
+        EvidenceVerdict.INSUFFICIENT_DATA.value,
+    }
+    if (
+        data.get("case_type") in MANDATORY_REVIEW_CASE_TYPES
+        or data.get("evidence_verdict") in MANDATORY_REVIEW_EVIDENCE
+    ):
+        data["human_review_required"] = True
+
     # Escalate severity for high-value transactions regardless of Claude's assessment.
     if max_amount >= HIGH_VALUE_THRESHOLD:
         if data.get("severity") in ("low", "medium"):
@@ -336,8 +352,10 @@ def analyze_ticket(client: Any, provider: str, request: AnalyzeRequest) -> Analy
             data["reason_codes"] = reason_codes
 
     # Defence-in-depth: sanitise customer_reply for safety violations.
-    # Guard against null — Claude may return customer_reply: null for non-actionable tickets.
-    if data.get("customer_reply") is not None:
+    # Guard against null or missing — Claude may omit customer_reply on edge cases.
+    if not data.get("customer_reply"):
+        data["customer_reply"] = _SAFE_FALLBACK_REPLY
+    else:
         data["customer_reply"] = _safe_customer_reply(data["customer_reply"])
 
     try:
