@@ -103,8 +103,8 @@ class AnalyzeRequest(BaseModel):
     @field_validator("ticket_id")
     @classmethod
     def ticket_id_printable(cls, v: str) -> str:
-        # Reject control characters; ticket_id is echoed directly in the response.
-        if not v.strip() or any(ord(c) < 32 for c in v):
+        # Reject control chars, DEL, and Unicode invisibles; ticket_id is echoed into LLM prompts.
+        if not v.strip() or any(not c.isprintable() for c in v):
             raise ValueError("ticket_id must contain only printable characters")
         return v
 
